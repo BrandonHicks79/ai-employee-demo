@@ -3,10 +3,12 @@
 The intent model loads from HuggingFace Hub (too big for GitHub).
 Same rules as the Colab build. Returns (response_text, escalated, brief).
 """
+import json
+import re
+
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from huggingface_hub import hf_hub_download
-import json
 
 from .entities import extract_entities
 from .handoff import summarize_handoff
@@ -17,6 +19,21 @@ from .handoff import summarize_handoff
 HOURS_TEXT = "We're open 9-5 weekdays, 9-1 Saturdays."
 PRICING_TEXT = "Pricing depends on the service — consultations are free."
 CONFIDENCE_THRESHOLD = 0.6
+
+# Explicit "let me talk to a human" requests bypass the classifier entirely.
+# Deterministic — no ML uncertainty on the clearest escalation signal there is.
+HUMAN_REQUEST = re.compile(
+    r"\b(speak|talk)\s+to\s+(someone|a human|a person|a manager|an agent)\b"
+    r"|\bget\s+me\s+(a )?(human|person|manager|someone)\b"
+    r"|\bbring\s+me\s+(a )?(human|person|manager|someone)\b"
+    r"|\bi\s+want\s+(a )?(human|manager)\b"
+    r"|\breal\s+person\b",
+    re.IGNORECASE,
+)
+
+# Caller-facing handoff line. Internal reasons (e.g. confidence scores) stay
+# in history for debugging — the caller never sees them.
+HANDOFF_LINE = "Let me bring in someone to help."
 
 
 class DialogueManager:
@@ -46,18 +63,23 @@ class DialogueManager:
 
     def handle(self, text):
         """Returns (response_text, escalated: bool, brief: str | None)."""
+        # 0. explicit human request — skip the classifier, escalate confidently
+        if HUMAN_REQUEST.search(text):
+            ents = extract_entities(text)
+            self.history.append({"user": text, "intent": "handoff_request",
+                                 "conf": 1.0, "entities": ents})
+            return HANDOFF_LINE, True, summarize_handoff(self.history)
+
         intent, conf = self.predict_intent(text)
         ents = extract_entities(text)
         self.history.append({"user": text, "intent": intent,
                              "conf": conf, "entities": ents})
 
-        def escalate(reason):
-            brief = summarize_handoff(self.history)
-            return (f"Let me bring in someone to help. ({reason})",
-                    True, brief)
+        def escalate():
+            return HANDOFF_LINE, True, summarize_handoff(self.history)
 
         if conf < CONFIDENCE_THRESHOLD:
-            return escalate(f"low confidence {conf:.2f}")
+            return escalate()
 
         if intent == "booking":
             dts = ents["datetimes"]
@@ -93,7 +115,7 @@ class DialogueManager:
             return (PRICING_TEXT + " What did you need done?", False, None)
 
         if intent == "complaint":
-            return escalate("complaint")
+            return escalate()
 
         return ("I didn't quite catch that — can you say it another way? "
                 "Or I can bring in someone to help.", False, None)
