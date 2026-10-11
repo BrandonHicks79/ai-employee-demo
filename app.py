@@ -38,7 +38,8 @@ if "mode" not in st.session_state:
 
 
 def reset_call():
-    st.session_state.turns = []
+    # every fresh call opens with the current mode's greeting
+    st.session_state.turns = [("ai", GREETINGS[st.session_state.mode])]
     if st.session_state.dm is not None:
         st.session_state.dm.reset()
 
@@ -78,7 +79,7 @@ if st.session_state.dm is None:
         except Exception:
             token = None
         st.session_state.dm = DialogueManager(HF_MODEL_ID, hf_token=token)
-        st.session_state.turns.append(("ai", GREETINGS[st.session_state.mode]))
+        reset_call()
 
 dm = st.session_state.dm
 
