@@ -112,7 +112,7 @@ if caller_text:
     # while slot-filling (answering our follow-up), the rule-based flow owns
     # the turn — skip the ML escalation check so fragments like "Tuesday at
     # 3pm" don't get misread as escalation signals
-    if dm.slots.get("awaiting"):
+    if dm.slots.get("awaiting") or dm.is_conversation_end(caller_text):
         esc_ml = False
     else:
         esc_ml, _prob = should_escalate(caller_text)

@@ -6,6 +6,10 @@ Returns (response_text, escalated, brief).
 Key design point: the manager has short-term memory (slots). When it asks a
 follow-up question ("what day and time?"), the next message is interpreted
 as the answer — NOT re-classified from scratch. That's slot filling.
+
+Deterministic fast paths (no classifier involved):
+  - explicit "talk to a human" -> warm handoff
+  - closing phrases ("that's all", "bye") -> graceful end of call
 """
 import json
 import re
@@ -35,6 +39,19 @@ HUMAN_REQUEST = re.compile(
     re.IGNORECASE,
 )
 
+# Closing phrases — end the call gracefully, never escalate.
+GOODBYE = re.compile(
+    r"("
+    r"\bgood-?bye\b|\bbye\b|"
+    r"\bthat'?s (all|it|everything)\b|"
+    r"\bthat (is|will be) all\b|"
+    r"\bno,? that('ll| will be|s)? all\b|"
+    r"\bi'?m (all )?done\b|"
+    r"\b(thanks|thank you)(,? bye)?\s*$"
+    r")",
+    re.IGNORECASE,
+)
+
 CANCEL_WORDS = re.compile(r"\b(never mind|nevermind|cancel|no thanks|forget it)\b",
                           re.IGNORECASE)
 
@@ -59,6 +76,9 @@ class DialogueManager:
         self.history = []
         self.slots = {}
 
+    def is_conversation_end(self, text):
+        return bool(GOODBYE.search(text))
+
     def predict_intent(self, text):
         enc = self.tok(text, truncation=True, padding=True,
                        return_tensors="pt", max_length=64)
@@ -81,6 +101,14 @@ class DialogueManager:
             self._log(text, "handoff_request", 1.0, ents)
             self.slots.pop("awaiting", None)
             return HANDOFF_LINE, True, summarize_handoff(self.history)
+
+        # 0b. closing phrase — end the call gracefully, never escalate
+        if self.is_conversation_end(text):
+            self._log(text, "goodbye", 1.0, ents)
+            self.slots.pop("awaiting", None)
+            nm = self.slots.get("name")
+            return (f"You're welcome{', ' + nm if nm else ''}! Have a great day.",
+                    False, None)
 
         # 1. slot filling — the caller is answering our follow-up question,
         #    so don't re-classify; just fill the slot.
@@ -110,6 +138,7 @@ class DialogueManager:
                 return ("No problem — we'll skip the booking. Anything else?",
                         False, None)
             nm = ents["name"] or text.strip()
+            ents["name"] = nm  # so the handoff brief picks it up
             pending = self.slots.pop("pending_booking", {})
             self.slots.pop("awaiting", None)
             self.slots["name"] = nm
