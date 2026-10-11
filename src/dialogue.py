@@ -1,7 +1,11 @@
 """Dialogue manager: DistilBERT intent + entities -> rule-based next step.
 
 The intent model loads from HuggingFace Hub (too big for GitHub).
-Same rules as the Colab build. Returns (response_text, escalated, brief).
+Returns (response_text, escalated, brief).
+
+Key design point: the manager has short-term memory (slots). When it asks a
+follow-up question ("what day and time?"), the next message is interpreted
+as the answer — NOT re-classified from scratch. That's slot filling.
 """
 import json
 import re
@@ -30,6 +34,9 @@ HUMAN_REQUEST = re.compile(
     r"|\breal\s+person\b",
     re.IGNORECASE,
 )
+
+CANCEL_WORDS = re.compile(r"\b(never mind|nevermind|cancel|no thanks|forget it)\b",
+                          re.IGNORECASE)
 
 # Caller-facing handoff line. Internal reasons (e.g. confidence scores) stay
 # in history for debugging — the caller never sees them.
@@ -61,21 +68,71 @@ class DialogueManager:
             idx = int(probs.argmax())
             return self.labels[idx], float(probs[idx])
 
-    def handle(self, text):
-        """Returns (response_text, escalated: bool, brief: str | None)."""
-        # 0. explicit human request — skip the classifier, escalate confidently
-        if HUMAN_REQUEST.search(text):
-            ents = extract_entities(text)
-            self.history.append({"user": text, "intent": "handoff_request",
-                                 "conf": 1.0, "entities": ents})
-            return HANDOFF_LINE, True, summarize_handoff(self.history)
-
-        intent, conf = self.predict_intent(text)
-        ents = extract_entities(text)
+    def _log(self, text, intent, conf, ents):
         self.history.append({"user": text, "intent": intent,
                              "conf": conf, "entities": ents})
 
+    def handle(self, text):
+        """Returns (response_text, escalated: bool, brief: str | None)."""
+        ents = extract_entities(text)
+
+        # 0. explicit human request — skip everything, escalate confidently
+        if HUMAN_REQUEST.search(text):
+            self._log(text, "handoff_request", 1.0, ents)
+            self.slots.pop("awaiting", None)
+            return HANDOFF_LINE, True, summarize_handoff(self.history)
+
+        # 1. slot filling — the caller is answering our follow-up question,
+        #    so don't re-classify; just fill the slot.
+        awaiting = self.slots.get("awaiting")
+
+        if awaiting == "datetime":
+            dts = ents["datetimes"]
+            if not dts:
+                return ("I didn't catch a day or time — what day and time works for you?",
+                        False, None)
+            self._log(text, "booking", 1.0, ents)
+            self.slots["pending_booking"] = dts[0]
+            nm = ents["name"]
+            if nm:  # gave name in the same message — skip asking
+                self.slots["name"] = nm
+                self.slots.pop("awaiting", None)
+                self.slots.pop("pending_booking", None)
+                return (f"Perfect, {nm} — you're booked for {dts[0]['text']}. "
+                        "Anything else?", False, None)
+            self.slots["awaiting"] = "name"
+            return (f"Got it, {dts[0]['text']} — what's your name?", False, None)
+
+        if awaiting == "name":
+            if CANCEL_WORDS.search(text):
+                self.slots.pop("awaiting", None)
+                self.slots.pop("pending_booking", None)
+                return ("No problem — we'll skip the booking. Anything else?",
+                        False, None)
+            nm = ents["name"] or text.strip()
+            pending = self.slots.pop("pending_booking", {})
+            self.slots.pop("awaiting", None)
+            self.slots["name"] = nm
+            self._log(text, "booking", 1.0, ents)
+            return (f"Perfect, {nm} — you're booked for {pending.get('text', 'that time')}. "
+                    "Anything else?", False, None)
+
+        if awaiting == "reschedule_datetime":
+            dts = ents["datetimes"]
+            if not dts:
+                return ("I didn't catch a day or time — what new day/time works for you?",
+                        False, None)
+            self._log(text, "reschedule", 1.0, ents)
+            self.slots.pop("awaiting", None)
+            return (f"Got it, moving your appointment to {dts[0]['text']}. "
+                    "Anything else?", False, None)
+
+        # 2. fresh turn — classify intent as usual
+        intent, conf = self.predict_intent(text)
+        self._log(text, intent, conf, ents)
+
         def escalate():
+            self.slots.pop("awaiting", None)
             return HANDOFF_LINE, True, summarize_handoff(self.history)
 
         if conf < CONFIDENCE_THRESHOLD:
@@ -84,25 +141,29 @@ class DialogueManager:
         if intent == "booking":
             dts = ents["datetimes"]
             name = ents["name"]
-            if not dts:
-                return ("Sure, I can book that. What day and time works for you?",
-                        False, None)
-            if not name and not self.slots.get("name"):
+            if dts:
                 self.slots["pending_booking"] = dts[0]
-                return (f"Got it, {dts[0]['text']} — what's your name?",
-                        False, None)
-            nm = name or self.slots.get("name")
             if name:
                 self.slots["name"] = name
-            dt_txt = (dts[0]["text"] if dts
-                      else self.slots.get("pending_booking", {}).get("text", "that time"))
+            pending = self.slots.get("pending_booking")
+            nm = self.slots.get("name")
+            if not pending:
+                self.slots["awaiting"] = "datetime"
+                return ("Sure, I can book that. What day and time works for you?",
+                        False, None)
+            if not nm:
+                self.slots["awaiting"] = "name"
+                return (f"Got it, {pending['text']} — what's your name?",
+                        False, None)
             self.slots.pop("pending_booking", None)
-            return (f"Perfect{', ' + nm if nm else ''} — you're booked for {dt_txt}. "
+            self.slots.pop("awaiting", None)
+            return (f"Perfect, {nm} — you're booked for {pending['text']}. "
                     "Anything else?", False, None)
 
         if intent == "reschedule":
             dts = ents["datetimes"]
             if not dts:
+                self.slots["awaiting"] = "reschedule_datetime"
                 return ("I can help move that. What new day/time works for you?",
                         False, None)
             return (f"Got it, moving your appointment to {dts[0]['text']}. "
