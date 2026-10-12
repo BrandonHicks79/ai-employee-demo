@@ -9,6 +9,7 @@ the AI assists you in a private panel — account lookups, sentiment alerts,
 suggested replies, call wrap-up notes.
 """
 import io
+import os
 
 import streamlit as st
 from gtts import gTTS
@@ -25,9 +26,12 @@ HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
 # Bump on every shipped fix — shown in the sidebar so you can confirm
 # the live app is actually running the latest push.
-BUILD = "2026-10-12j"
+BUILD = "2026-10-12k"
 
-st.set_page_config(page_title="Brandi - Your AI Employee", page_icon="📞", layout="centered")
+# Brandi's face — falls back to 📞 if the image isn't in the repo
+_APP_ICON = "assets/brandi.png" if os.path.exists("assets/brandi.png") else "📞"
+st.set_page_config(page_title="Brandi - Your AI Employee", page_icon=_APP_ICON,
+                   layout="centered")
 
 GREETINGS = {
     "Overflow": ("Thanks for calling — all of our staff are on other lines right now, "
@@ -90,8 +94,13 @@ def reset_call():
 
 # ---------------------------------------------------------------- welcome
 def render_welcome():
-    st.title("📞 Brandi")
-    st.subheader("- Your AI Employee")
+    hcol1, hcol2 = st.columns([1, 4])
+    with hcol1:
+        if os.path.exists("assets/brandi.png"):
+            st.image("assets/brandi.png", width=130)
+    with hcol2:
+        st.title("Brandi")
+        st.subheader("- Your AI Employee")
     st.markdown(
         "It answers when your staff are swamped, becomes the front desk after hours, "
         "and assists your team on live calls — with a warm handoff brief whenever "
