@@ -25,7 +25,7 @@ HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
 # Bump on every shipped fix — shown in the sidebar so you can confirm
 # the live app is actually running the latest push.
-BUILD = "2026-10-12e"
+BUILD = "2026-10-12f"
 
 st.set_page_config(page_title="AI Employee — Live Demo", page_icon="📞", layout="centered")
 

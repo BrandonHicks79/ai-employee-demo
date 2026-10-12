@@ -11,15 +11,31 @@ def extract_datetime(text):
     if not results:
         return []
     out = []
-    junk = {"to", "a", "the", "and", "for", "on", "at", "in"}
+    junk = {"to", "a", "the", "and", "for", "on", "at", "in", "of"}
     for m, d in results:
-        mc = m.strip().lower()
+        # strip trailing junk words: "Tuesday and" -> "Tuesday"
+        words = m.strip().split()
+        while len(words) > 1 and words[-1].lower().rstrip(",.") in junk:
+            words.pop()
+        clean = " ".join(words).strip()
+        mc = clean.lower()
         if len(mc) < 3:
             continue
         if mc in junk:
             continue
-        out.append({"text": m, "value": d.isoformat()})
+        out.append({"text": clean, "value": d.isoformat()})
     return out
+
+
+# words that are never a person's name — stops "this is ridiculous"
+# from extracting name="ridiculous"
+NOT_A_NAME = {
+    "ridiculous", "terrible", "horrible", "awful", "wrong", "right", "fine",
+    "okay", "ok", "great", "good", "bad", "stupid", "crazy", "insane",
+    "difficult", "hard", "easy", "important", "urgent", "possible",
+    "true", "false", "real", "big", "small", "new", "old", "all", "it",
+    "this", "that",
+}
 
 
 def extract_name(text):
@@ -31,7 +47,10 @@ def extract_name(text):
     for pat in patterns:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
-            return m.group(1).strip()
+            name = m.group(1).strip()
+            if name.lower() in NOT_A_NAME:
+                continue
+            return name
     return None
 
 
