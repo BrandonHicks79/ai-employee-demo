@@ -25,9 +25,9 @@ HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
 # Bump on every shipped fix — shown in the sidebar so you can confirm
 # the live app is actually running the latest push.
-BUILD = "2026-10-12h"
+BUILD = "2026-10-12i"
 
-st.set_page_config(page_title="AI Employee — Live Demo", page_icon="📞", layout="centered")
+st.set_page_config(page_title="Brandi - Your AI Employee", page_icon="📞", layout="centered")
 
 GREETINGS = {
     "Overflow": ("Thanks for calling — all of our staff are on other lines right now, "
@@ -90,8 +90,8 @@ def reset_call():
 
 # ---------------------------------------------------------------- welcome
 def render_welcome():
-    st.title("📞 AI Employee")
-    st.subheader("An AI front-desk worker for small businesses")
+    st.title("📞 Brandi")
+    st.subheader("Your AI Employee")
     st.markdown(
         "It answers when your staff are swamped, becomes the front desk after hours, "
         "and assists your team on live calls — with a warm handoff brief whenever "
@@ -308,7 +308,7 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------- header
-st.title("📞 AI Employee — live demo")
+st.title("📞 Brandi — live demo")
 if st.session_state.mode == "Assist":
     st.caption("SIMULATED DEMO · assist mode · you play Nikki (office staff)")
 else:
