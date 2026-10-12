@@ -10,6 +10,8 @@ Nikki is visually separated from what the caller "hears."
 
 from .demo_data import find_customer
 
+import re
+
 # ------------------------------------------------------------------
 # Frustration detection — demo stand-in for a production sentiment model
 # ------------------------------------------------------------------
@@ -130,6 +132,9 @@ ASSIST_SCENARIOS = {
                     "$45 past due). She disputed a September payment — no record found; offered "
                     "a billing review. Agreed to pay the full $130 via secure text link.\n\n"
                     "**Follow-up:** confirm payment posted."),
+        "policies": ("Refunds: duplicate charges are refunded within 5 business days after "
+                     "manager approval. Billing disputes: offer a billing-team review — "
+                     "never promise an adjustment yourself."),
     },
 
     "heated": {
@@ -187,5 +192,104 @@ ASSIST_SCENARIOS = {
                     "the Oct 6 visit. High frustration throughout — acknowledged, avoided "
                     "debating. Warm-transferred to the manager with a full brief.\n\n"
                     "**Follow-up:** confirm refund issued within 5 business days."),
+        "policies": ("Refunds need manager approval — never promise an amount or a timeline. "
+                     "Duplicate-charge refunds are issued within 5 business days after approval."),
     },
 }
+
+
+# ------------------------------------------------------------------
+# Live AI: whisper answers + feedback on Nikki's replies
+# ------------------------------------------------------------------
+def _payment_history_body(customer_name):
+    c = find_customer(customer_name)
+    pays = c.get("payments", []) if c else []
+    if not c:
+        return f"No account found for {customer_name}."
+    if not pays:
+        return f"No payments on record for {c['name']}."
+    lines = [f"**{c['name']}** — payment history:"]
+    for p in pays:
+        lines.append(f"- {p['date']}: **${p['amount']:.2f}** ({p['method']})")
+    return "\n".join(lines)
+
+
+def _draft_brief(ctx):
+    lines = [f"Caller: {ctx['caller_name']}", "Discussed so far:"]
+    for role, text in ctx["transcript"]:
+        who = "Caller" if role == "caller" else "Nikki"
+        snippet = text if len(text) <= 90 else text[:87] + "..."
+        lines.append(f"- {who}: '{snippet}'")
+    lines.append("Status: draft — review before handing off.")
+    return "\n".join(lines)
+
+
+def handle_whisper(text, ctx):
+    """Answer Nikki's private question live.
+
+    ctx keys: scenario, caller_name, step_idx, transcript.
+    Returns (kind, title, body) for an AI panel card.
+    """
+    t = text.lower()
+    sc = ctx["scenario"]
+    caller = ctx["caller_name"]
+
+    def current_suggestion():
+        step = sc["steps"][min(ctx["step_idx"], len(sc["steps"]) - 1)]
+        for c in step.get("cards", []):
+            if c.get("kind") == "suggestion":
+                return c["body"]
+        return None
+
+    # balance / invoice
+    if re.search(r"\b(balance|bill|invoice|owe|owed|owing)\b", t):
+        return ("invoice", "Account lookup", _invoice_body(caller))
+
+    # payment history
+    if re.search(r"\b(paid|payment|payments|history)\b", t):
+        return ("note", "Payment history", _payment_history_body(caller))
+
+    # handoff brief draft
+    if re.search(r"\b(brief|handoff|hand off|transfer|escalate|manager)\b", t):
+        return ("brief", "Draft handoff brief", _draft_brief(ctx))
+
+    # suggested reply for this moment
+    if re.search(r"\b(suggest|draft|what should i say|what do i say|help me (respond|reply|answer))\b", t):
+        s = current_suggestion()
+        return ("suggestion", "Suggested reply",
+                s or "No draft for this exact moment — speak naturally, I've got the records if you need them.")
+
+    # policy
+    if re.search(r"\b(policy|policies|refund|allowed|permitted)\b", t):
+        return ("note", "Policy", sc.get("policies", "No policy notes for this scenario."))
+
+    return ("note", "AI assistant",
+            "I can pull **balances/invoices**, **payment history**, **policy** notes, "
+            "**suggest a reply**, or **draft a handoff brief**. What do you need?")
+
+
+RISKY_PROMISE = re.compile(r"\brefund\b", re.IGNORECASE)
+TIMELINE_WORDS = re.compile(r"\b(today|now|immediately|right away|guarantee|promise)\b",
+                            re.IGNORECASE)
+EMPATHY_WORDS = re.compile(
+    r"\b(sorry|apolog|understand|hear you|frustrat|i see|makes sense)\b",
+    re.IGNORECASE)
+
+
+def feedback_on_reply(nikki_text, caller_text):
+    """Live private feedback on Nikki's reply. Returns list of (kind, title, body)."""
+    out = []
+    t = nikki_text.lower()
+    if RISKY_PROMISE.search(t) and TIMELINE_WORDS.search(t):
+        out.append(("alert", "Policy flag",
+                    "You mentioned a same-day refund — refunds need **manager approval** "
+                    "first. Don't commit to a timeline the manager hasn't approved."))
+    if frustration_level(caller_text) in ("MEDIUM", "HIGH"):
+        if EMPATHY_WORDS.search(t):
+            out.append(("note", "Nice",
+                        "✅ Good — you acknowledged the frustration before moving to facts."))
+        else:
+            out.append(("note", "Coaching",
+                        "The caller is frustrated and your reply doesn't acknowledge it — "
+                        "leading with empathy (\"I hear you…\") usually de-escalates faster."))
+    return out

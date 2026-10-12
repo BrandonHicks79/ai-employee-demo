@@ -20,6 +20,9 @@ DEMO_CUSTOMERS = [
             ],
         },
         "past_due": 0.00,
+        "payments": [
+            {"date": "Oct 2, 2026", "amount": 149.00, "method": "Card"},
+        ],
     },
     {
         "name": "Sarah",
@@ -33,11 +36,18 @@ DEMO_CUSTOMERS = [
             ],
         },
         "past_due": 45.00,
+        "payments": [
+            {"date": "Aug 12, 2026", "amount": 85.00, "method": "Card"},
+        ],
     },
     {
         "name": "Mike",
         "current_invoice": None,  # all paid up
         "past_due": 0.00,
+        "payments": [
+            {"date": "Oct 7, 2026", "amount": 75.00, "method": "Card"},
+            {"date": "Oct 7, 2026", "amount": 75.00, "method": "Card"},
+        ],
     },
 ]
 

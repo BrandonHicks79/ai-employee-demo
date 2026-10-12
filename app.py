@@ -13,7 +13,8 @@ import io
 import streamlit as st
 from gtts import gTTS
 
-from src.assist import ASSIST_SCENARIOS, build_cards, CARD_ICONS
+from src.assist import (ASSIST_SCENARIOS, build_cards, CARD_ICONS,
+                      handle_whisper, feedback_on_reply)
 from src.dialogue import DialogueManager
 from src.escalation import should_escalate
 
@@ -99,7 +100,12 @@ def render_assist_mode():
         if not st.session_state.get("assist_over"):
             nikki_text = st.chat_input("Reply as Nikki…", key="nikki_input")
             if nikki_text:
+                step = sc["steps"][st.session_state.assist_step]
                 st.session_state.assist_transcript.append(("nikki", nikki_text))
+                # live AI feedback on Nikki's actual reply
+                for kind, title, body in feedback_on_reply(nikki_text, step["caller"]):
+                    st.session_state.assist_cards.append(
+                        {"kind": kind, "title": title, "body": body})
                 nxt = st.session_state.assist_step + 1
                 if nxt < len(sc["steps"]):
                     st.session_state.assist_step = nxt
@@ -120,6 +126,22 @@ def render_assist_mode():
         st.caption("Private — the caller can't see this.")
         for card in st.session_state.assist_cards:
             render_assist_card(card)
+        st.divider()
+        with st.form("whisper_form", clear_on_submit=True):
+            whisper = st.text_input("Ask the AI privately",
+                                    placeholder="e.g. what's her balance?")
+            submitted = st.form_submit_button("Ask")
+        if submitted and whisper:
+            ctx = {
+                "scenario": sc,
+                "caller_name": sc["caller_name"],
+                "step_idx": st.session_state.assist_step,
+                "transcript": list(st.session_state.assist_transcript),
+            }
+            kind, title, body = handle_whisper(whisper, ctx)
+            st.session_state.assist_cards.append(
+                {"kind": kind, "title": title, "body": body})
+            st.rerun()
 
 
 # ---------------------------------------------------------------- sidebar
