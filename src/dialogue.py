@@ -10,6 +10,8 @@ as the answer — NOT re-classified from scratch. That's slot filling.
 Deterministic fast paths (no classifier involved):
   - explicit "talk to a human" -> warm handoff
   - closing phrases ("that's all", "bye") -> graceful end of call
+  - billing questions ("my current bill") -> demo account lookup
+    (production: swap src/demo_data.py for a real CRM/billing API)
 """
 import json
 import re
@@ -18,6 +20,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from huggingface_hub import hf_hub_download
 
+from .demo_data import find_customer
 from .entities import extract_entities
 from .handoff import summarize_handoff
 
@@ -52,6 +55,22 @@ GOODBYE = re.compile(
     re.IGNORECASE,
 )
 
+# Billing / invoice questions — handled by account lookup, not the classifier.
+BILLING = re.compile(
+    r"\b((my|current|outstanding|latest)\s+)*(bill|invoice|balance|statement)\b"
+    r"|\bhow much do i owe\b"
+    r"|\bwhat do i owe\b"
+    r"|\bamount (due|owed)\b",
+    re.IGNORECASE,
+)
+
+# ...unless it's a dispute ("my bill is wrong") — that stays on the
+# complaint/escalation path instead of triggering a lookup.
+BILLING_DISPUTE = re.compile(
+    r"\b(wrong|error|mistake|dispute|refund|overcharg|incorrect|fraud)\b",
+    re.IGNORECASE,
+)
+
 CANCEL_WORDS = re.compile(r"\b(never mind|nevermind|cancel|no thanks|forget it)\b",
                           re.IGNORECASE)
 
@@ -79,6 +98,9 @@ class DialogueManager:
     def is_conversation_end(self, text):
         return bool(GOODBYE.search(text))
 
+    def is_billing_request(self, text):
+        return bool(BILLING.search(text)) and not BILLING_DISPUTE.search(text)
+
     def predict_intent(self, text):
         enc = self.tok(text, truncation=True, padding=True,
                        return_tensors="pt", max_length=64)
@@ -91,6 +113,29 @@ class DialogueManager:
     def _log(self, text, intent, conf, ents):
         self.history.append({"user": text, "intent": intent,
                              "conf": conf, "entities": ents})
+
+    def _read_invoice(self, name):
+        """Demo account lookup. Production: replace with real CRM/billing API."""
+        customer = find_customer(name)
+        if not customer:
+            brief = summarize_handoff(self.history)
+            return (f"Hmm, I don't see an account under {name} — "
+                    "let me bring in someone who can look into that.",
+                    True, brief)
+        inv = customer.get("current_invoice")
+        if not inv:
+            return (f"Good news, {customer['name']} — you're all paid up, "
+                    "nothing due right now. Anything else I can help with?",
+                    False, None)
+        items = ", ".join(f"{label} (${amt:.2f})" for label, amt in inv["line_items"])
+        past = customer.get("past_due", 0) or 0
+        past_line = f" You also have ${past:.2f} past due." if past > 0 else ""
+        return (
+            f"Here's your account, {customer['name']}: invoice {inv['id']} "
+            f"({inv['period']}) is ${inv['amount_due']:.2f}, due {inv['due_date']}."
+            f"{past_line} That covers: {items}. Anything else I can help with?",
+            False, None,
+        )
 
     def handle(self, text):
         """Returns (response_text, escalated: bool, brief: str | None)."""
@@ -109,6 +154,17 @@ class DialogueManager:
             nm = self.slots.get("name")
             return (f"You're welcome{', ' + nm if nm else ''}! Have a great day.",
                     False, None)
+
+        # 0c. billing — pull the invoice directly, no classifier needed
+        if self.is_billing_request(text):
+            self._log(text, "billing", 1.0, ents)
+            self.slots.pop("awaiting", None)  # topic change — drop other follow-ups
+            nm = self.slots.get("name")
+            if not nm:
+                self.slots["awaiting"] = "billing_name"
+                return ("I can pull that up — what's the name on the account?",
+                        False, None)
+            return self._read_invoice(nm)
 
         # 1. slot filling — the caller is answering our follow-up question,
         #    so don't re-classify; just fill the slot.
@@ -145,6 +201,14 @@ class DialogueManager:
             self._log(text, "booking", 1.0, ents)
             return (f"Perfect, {nm} — you're booked for {pending.get('text', 'that time')}. "
                     "Anything else?", False, None)
+
+        if awaiting == "billing_name":
+            nm = ents["name"] or text.strip()
+            ents["name"] = nm
+            self._log(text, "billing", 1.0, ents)
+            self.slots["name"] = nm
+            self.slots.pop("awaiting", None)
+            return self._read_invoice(nm)
 
         if awaiting == "reschedule_datetime":
             dts = ents["datetimes"]

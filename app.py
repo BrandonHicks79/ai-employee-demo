@@ -63,7 +63,8 @@ with st.sidebar:
             "2. **Entities** — dates, times, names pulled out (parsed, not trained)\n"
             "3. **Dialogue** — rule-based manager decides the next step\n"
             "4. **Escalation** — binary classifier watches for handoff triggers\n"
-            "5. **Handoff** — warm brief for the human, no re-asking"
+            "5. **Handoff** — warm brief for the human, no re-asking\n"
+            "6. **Account lookup** — demo customer data (stand-in for a real CRM/billing integration)"
         )
 
 # ---------------------------------------------------------------- header
@@ -112,7 +113,7 @@ if caller_text:
     # while slot-filling (answering our follow-up), the rule-based flow owns
     # the turn — skip the ML escalation check so fragments like "Tuesday at
     # 3pm" don't get misread as escalation signals
-    if dm.slots.get("awaiting") or dm.is_conversation_end(caller_text):
+    if dm.slots.get("awaiting") or dm.is_conversation_end(caller_text) or dm.is_billing_request(caller_text):
         esc_ml = False
     else:
         esc_ml, _prob = should_escalate(caller_text)
