@@ -268,7 +268,14 @@ def handle_whisper(text, ctx):
             "**suggest a reply**, or **draft a handoff brief**. What do you need?")
 
 
-RISKY_PROMISE = re.compile(r"\brefund\b", re.IGNORECASE)
+RISKY_PROMISE = re.compile(
+    r"\b(will|'ll|gonna|going to)\s+(refund|give\s+you\s+back)\b"
+    r"|\brefund\s+(you|your|it|that|the)\b"
+    r"|\b(full|complete|entire)\s+refund\b"
+    r"|\bmoney\s+back\b"
+    r"|\b(issue|process)\s+(a\s+|the\s+)?refund\b",
+    re.IGNORECASE,
+)
 TIMELINE_WORDS = re.compile(r"\b(today|now|immediately|right away|guarantee|promise)\b",
                             re.IGNORECASE)
 EMPATHY_WORDS = re.compile(
@@ -280,10 +287,17 @@ def feedback_on_reply(nikki_text, caller_text):
     """Live private feedback on Nikki's reply. Returns list of (kind, title, body)."""
     out = []
     t = nikki_text.lower()
-    if RISKY_PROMISE.search(t) and TIMELINE_WORDS.search(t):
+    # any committed refund phrasing — unless she's already deferring to approval
+    m = RISKY_PROMISE.search(nikki_text)
+    if m and "approv" not in t:
+        extra = ""
+        if TIMELINE_WORDS.search(nikki_text):
+            extra = (" Committing to a timeline makes it worse — "
+                     "the manager hasn't approved anything yet.")
         out.append(("alert", "Policy flag",
-                    "You mentioned a same-day refund — refunds need **manager approval** "
-                    "first. Don't commit to a timeline the manager hasn't approved."))
+                    f"You just committed to a refund (\"{m.group(0).strip()}\") — refunds need "
+                    "**manager approval** first. Offer the approval process "
+                    "(\"I'll flag this for approval right now\"), not the outcome." + extra))
     if frustration_level(caller_text) in ("MEDIUM", "HIGH"):
         if EMPATHY_WORDS.search(t):
             out.append(("note", "Nice",
