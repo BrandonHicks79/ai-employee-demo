@@ -14,7 +14,7 @@ import streamlit as st
 from gtts import gTTS
 
 from src.assist import (ASSIST_SCENARIOS, build_cards, CARD_ICONS,
-                      handle_whisper, feedback_on_reply)
+                        handle_whisper, feedback_on_reply)
 from src.dialogue import DialogueManager
 from src.escalation import should_escalate
 
@@ -25,7 +25,7 @@ HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
 # Bump on every shipped fix — shown in the sidebar so you can confirm
 # the live app is actually running the latest push.
-BUILD = "2026-10-12f"
+BUILD = "2026-10-12h"
 
 st.set_page_config(page_title="AI Employee — Live Demo", page_icon="📞", layout="centered")
 
@@ -38,6 +38,33 @@ GREETINGS = {
                "the AI assists you privately in the panel on the right."),
 }
 
+MODE_DESCRIPTIONS = {
+    "Overflow": "🔥 The AI answers when your staff are swamped.",
+    "After-hours": "🌙 The AI becomes the front desk after closing.",
+    "Assist": "🤝 The AI assists your staff on live calls — you play the staff member.",
+}
+
+WELCOME_CARDS = [
+    ("🔥", "Overflow",
+     "Your team is swamped — the AI picks up the overflow: books appointments, "
+     "reschedules, answers questions, takes messages."),
+    ("🌙", "After-hours",
+     "The office is closed — the AI is the front desk. Every call answered, "
+     "no more missed opportunities."),
+    ("🤝", "Assist",
+     "The AI sits alongside your staff on live calls — pulls up records, drafts "
+     "replies, flags risks. You play the staff member."),
+]
+
+SUGGESTED_PROMPTS = {
+    "Overflow": ["Do you have any openings today?",
+                 "What are your hours?",
+                 "I need to move my appointment"],
+    "After-hours": ["What are your hours?",
+                    "Can I book for tomorrow morning?",
+                    "What's my current bill?"],
+}
+
 # ---------------------------------------------------------------- state
 if "dm" not in st.session_state:
     st.session_state.dm = None
@@ -45,6 +72,8 @@ if "turns" not in st.session_state:
     st.session_state.turns = []          # (role, text) — role: caller | ai | brief
 if "mode" not in st.session_state:
     st.session_state.mode = "Overflow"
+if "show_welcome" not in st.session_state:
+    st.session_state.show_welcome = True
 
 ASSIST_KEYS = ("assist_scenario", "assist_step", "assist_transcript",
                "assist_cards", "assist_over")
@@ -57,6 +86,39 @@ def reset_call():
         st.session_state.dm.reset()
     for k in ASSIST_KEYS:
         st.session_state.pop(k, None)
+
+
+# ---------------------------------------------------------------- welcome
+def render_welcome():
+    st.title("📞 AI Employee")
+    st.subheader("An AI front-desk worker for small businesses")
+    st.markdown(
+        "It answers when your staff are swamped, becomes the front desk after hours, "
+        "and assists your team on live calls — with a warm handoff brief whenever "
+        "a human needs to step in. Pick a mode below to try it live."
+    )
+    st.info(
+        "ℹ️ **Demonstration only.** This demo runs on text so you can try it right here "
+        "in your browser. The finished product works over **real phone calls — voice in, "
+        "voice out** — and handles **open-ended conversation**, not just the scenarios "
+        "shown here. All callers, names, and business data in this demo are fictional."
+    )
+    st.divider()
+    cols = st.columns(3)
+    for col, (icon, name, desc) in zip(cols, WELCOME_CARDS):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"## {icon} {name}")
+                st.markdown(desc)
+                if st.button(f"Try {name}", key=f"try_{name}", use_container_width=True):
+                    st.session_state.mode = name
+                    st.session_state.show_welcome = False
+                    reset_call()
+                    if name == "Assist":
+                        start_assist_call("billing")
+                    st.rerun()
+    st.divider()
+    st.caption("SIMULATED DEMO · all callers and data are fictional · built by Brandon Hicks")
 
 
 # ---------------------------------------------------------------- assist mode
@@ -82,7 +144,8 @@ def render_assist_card(card):
 
 def render_assist_mode():
     st.caption("You are **Nikki**, the office staff. The AI panel on the right is "
-               "private — the caller can't see it.")
+               "private — the caller can't see this. The caller follows a script in this "
+               "demo; the finished product handles live, unscripted calls.")
 
     ids = list(ASSIST_SCENARIOS.keys())
     labels = [ASSIST_SCENARIOS[i]["label"] for i in ids]
@@ -148,20 +211,88 @@ def render_assist_mode():
             st.rerun()
 
 
+# ---------------------------------------------------------------- caller modes (overflow / after-hours)
+def render_caller_modes():
+    # transcript
+    for role, text in st.session_state.turns:
+        if role == "brief":
+            with st.chat_message("assistant"):
+                with st.container(border=True):
+                    st.markdown("#### 🔥 Warm handoff brief")
+                    st.code(text, language=None)
+        else:
+            with st.chat_message("user" if role == "caller" else "assistant"):
+                st.markdown(text)
+
+    # suggested openers — a blank box is intimidating; one tap starts the call
+    st.caption("Not sure what to say? Try one:")
+    pcols = st.columns(3)
+    for i, (pc, prompt) in enumerate(zip(pcols, SUGGESTED_PROMPTS[st.session_state.mode])):
+        if pc.button(prompt, key=f"sug_{st.session_state.mode}_{i}",
+                     use_container_width=True):
+            st.session_state.pending_caller_text = prompt
+            st.rerun()
+
+    # caller input (typed or via a suggested prompt)
+    caller_text = st.chat_input("Type as the caller…")
+    pending = st.session_state.pop("pending_caller_text", None)
+    text_to_handle = caller_text or pending
+    if text_to_handle:
+        dm = st.session_state.dm
+        st.session_state.turns.append(("caller", text_to_handle))
+        with st.chat_message("user"):
+            st.markdown(text_to_handle)
+
+        # while slot-filling, saying goodbye, or asking about billing, the
+        # rule-based flow owns the turn — skip the ML escalation check so
+        # fragments like "Tuesday at 3pm" don't misfire it
+        if (dm.slots.get("awaiting") or dm.is_conversation_end(text_to_handle)
+                or dm.is_billing_request(text_to_handle)):
+            esc_ml = False
+        else:
+            esc_ml, _prob = should_escalate(text_to_handle)
+        reply, escalated_dm, brief = dm.handle(text_to_handle)
+        escalated = esc_ml or escalated_dm
+
+        with st.chat_message("assistant"):
+            if escalated:
+                st.markdown(reply)
+                with st.container(border=True):
+                    st.markdown("#### 🔥 Warm handoff brief")
+                    st.code(brief, language=None)
+                st.session_state.turns.append(("ai", reply))
+                st.session_state.turns.append(("brief", brief))
+                if voice:
+                    speak(reply)
+            else:
+                st.markdown(reply)
+                st.session_state.turns.append(("ai", reply))
+                if voice:
+                    speak(reply)
+
+
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.header("Demo controls")
     mode = st.radio("Mode", list(GREETINGS),
                     index=list(GREETINGS).index(st.session_state.mode))
+    st.caption(MODE_DESCRIPTIONS[st.session_state.mode])
     if st.session_state.mode == "Assist":
         voice = False  # AI whispers to Nikki here — nothing to speak aloud
     else:
         voice = st.checkbox("🔊 Speak AI responses", value=True)
     if st.button("↺ Restart call"):
+        st.session_state.show_welcome = False
         reset_call()
+        if st.session_state.mode == "Assist":
+            start_assist_call(st.session_state.get("assist_scenario") or "billing")
+        st.rerun()
+    if st.button("← About this demo"):
+        st.session_state.show_welcome = True
         st.rerun()
     if mode != st.session_state.mode:
         st.session_state.mode = mode
+        st.session_state.show_welcome = False
         reset_call()
         st.rerun()
     with st.expander("How this works"):
@@ -174,6 +305,7 @@ with st.sidebar:
             "6. **Account lookup** — demo customer data (stand-in for a real CRM/billing integration)"
         )
     st.caption(f"build {BUILD}")
+
 
 # ---------------------------------------------------------------- header
 st.title("📞 AI Employee — live demo")
@@ -204,50 +336,9 @@ def speak(text):
 
 
 # ---------------------------------------------------------------- main
-if st.session_state.mode == "Assist":
+if st.session_state.get("show_welcome", True):
+    render_welcome()
+elif st.session_state.mode == "Assist":
     render_assist_mode()
 else:
-    # transcript
-    for role, text in st.session_state.turns:
-        if role == "brief":
-            with st.chat_message("assistant"):
-                with st.container(border=True):
-                    st.markdown("#### 🔥 Warm handoff brief")
-                    st.code(text, language=None)
-        else:
-            with st.chat_message("user" if role == "caller" else "assistant"):
-                st.markdown(text)
-
-    # caller input
-    caller_text = st.chat_input("Type as the caller…")
-    if caller_text:
-        st.session_state.turns.append(("caller", caller_text))
-        with st.chat_message("user"):
-            st.markdown(caller_text)
-
-        # while slot-filling, saying goodbye, or asking about billing, the
-        # rule-based flow owns the turn — skip the ML escalation check so
-        # fragments like "Tuesday at 3pm" don't misfire it
-        if (dm.slots.get("awaiting") or dm.is_conversation_end(caller_text)
-                or dm.is_billing_request(caller_text)):
-            esc_ml = False
-        else:
-            esc_ml, _prob = should_escalate(caller_text)
-        reply, escalated_dm, brief = dm.handle(caller_text)
-        escalated = esc_ml or escalated_dm
-
-        with st.chat_message("assistant"):
-            if escalated:
-                st.markdown(reply)
-                with st.container(border=True):
-                    st.markdown("#### 🔥 Warm handoff brief")
-                    st.code(brief, language=None)
-                st.session_state.turns.append(("ai", reply))
-                st.session_state.turns.append(("brief", brief))
-                if voice:
-                    speak(reply)
-            else:
-                st.markdown(reply)
-                st.session_state.turns.append(("ai", reply))
-                if voice:
-                    speak(reply)
+    render_caller_modes()
