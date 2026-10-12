@@ -10,6 +10,12 @@ Nikki is visually separated from what the caller "hears."
 
 from .demo_data import find_customer
 
+try:
+    from .entities import extract_entities
+except ImportError:  # pragma: no cover — dateparser missing in some envs
+    def extract_entities(text):
+        return {"datetimes": [], "name": None, "phone": None}
+
 import re
 
 # ------------------------------------------------------------------
@@ -36,6 +42,7 @@ def frustration_level(text):
 
 
 CARD_ICONS = {
+    "analysis": "🔍",
     "invoice": "🧾",
     "suggestion": "💬",
     "alert": "⚠️",
@@ -45,6 +52,44 @@ CARD_ICONS = {
     "brief": "🔥",
     "wrapup": "📝",
 }
+
+
+TOPIC_PATTERNS = [
+    ("refund demand", r"\b(refund|money back|double charg|charged?\s+twice)\b"),
+    ("billing question", r"\b(bill|invoice|balance|owe|owed)\b"),
+    ("escalation request", r"\b(manager|supervisor|real person|someone else)\b"),
+    ("timeline demand", r"\b(today|now|immediately|right away|asap)\b"),
+    ("payment intent", r"\b(pay|payment)\b"),
+]
+
+
+def analyze_caller_line(text):
+    """Live per-message analysis: frustration, entities, topics.
+
+    Runs on the actual caller text every turn — the AI visibly thinking in
+    real time, not a scripted card.
+    """
+    lvl = frustration_level(text)
+    ents = extract_entities(text)
+    t = text.lower()
+    topics = [label for label, pat in TOPIC_PATTERNS if re.search(pat, t)]
+    bits = [f"**Frustration:** {lvl}"]
+    if topics:
+        bits.append("**Topics:** " + ", ".join(topics))
+    details = []
+    for d in ents.get("datetimes", [])[:3]:
+        details.append(f"\"{d['text']}\" (date/time)")
+    if ents.get("name"):
+        details.append(f"\"{ents['name']}\" (name)")
+    if ents.get("phone"):
+        details.append(f"\"{ents['phone']}\" (phone)")
+    if details:
+        bits.append("**Picked up:** " + ", ".join(details))
+    if lvl in ("MEDIUM", "HIGH"):
+        bits.append("⚠️ Acknowledge the feeling before the facts. "
+                    "Don't debate the charge or promise outcomes.")
+    return {"kind": "analysis", "title": "AI analysis — live",
+            "body": "\n\n".join(bits)}
 
 
 def _invoice_body(customer_name):
@@ -61,24 +106,16 @@ def _invoice_body(customer_name):
 def build_cards(step, caller_text):
     """Resolve a scenario step's card specs into renderable cards.
 
-    Invoice cards are built live from demo data; frustration alerts are
-    computed live from the caller line.
+    The live analysis card always comes first — computed fresh from the
+    actual caller text every turn. Invoice cards are built live from demo
+    data; frustration alerts fire from the live scorer.
     """
-    cards = []
+    cards = [analyze_caller_line(caller_text)]
     for spec in step.get("cards", []):
         spec = dict(spec)
         if spec.get("kind") == "invoice":
             spec["body"] = _invoice_body(spec.pop("customer"))
         cards.append(spec)
-    if step.get("sentiment_watch"):
-        level = frustration_level(caller_text)
-        if level in ("MEDIUM", "HIGH"):
-            cards.insert(0, {
-                "kind": "alert",
-                "title": f"Sentiment alert — frustration {level}",
-                "body": ("Acknowledge the feeling before the facts. "
-                         "Don't debate the charge or promise outcomes."),
-            })
     return cards
 
 

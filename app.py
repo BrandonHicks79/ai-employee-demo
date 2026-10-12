@@ -23,6 +23,10 @@ from src.escalation import should_escalate
 # ------------------------------------------------------------------
 HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
+# Bump on every shipped fix — shown in the sidebar so you can confirm
+# the live app is actually running the latest push.
+BUILD = "2026-10-12e"
+
 st.set_page_config(page_title="AI Employee — Live Demo", page_icon="📞", layout="centered")
 
 GREETINGS = {
@@ -169,6 +173,7 @@ with st.sidebar:
             "5. **Handoff** — warm brief for the human, no re-asking\n"
             "6. **Account lookup** — demo customer data (stand-in for a real CRM/billing integration)"
         )
+    st.caption(f"build {BUILD}")
 
 # ---------------------------------------------------------------- header
 st.title("📞 AI Employee — live demo")
