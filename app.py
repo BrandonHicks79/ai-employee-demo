@@ -26,7 +26,7 @@ HF_MODEL_ID = "brandonhicks79/ai-employee-intent"
 
 # Bump on every shipped fix — shown in the sidebar so you can confirm
 # the live app is actually running the latest push.
-BUILD = "2026-10-12k"
+BUILD = "2026-10-12l"
 
 # Brandi's face — falls back to 📞 if the image isn't in the repo
 _APP_ICON = "assets/brandi.png" if os.path.exists("assets/brandi.png") else "📞"
@@ -317,7 +317,12 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------- header
-st.title("📞 Brandi - Your AI Employee")
+hdr_img, hdr_txt = st.columns([1, 12])
+with hdr_img:
+    if os.path.exists("assets/brandi.png"):
+        st.image("assets/brandi.png", width=64)
+with hdr_txt:
+    st.title("Brandi - Your AI Employee")
 if st.session_state.mode == "Assist":
     st.caption("SIMULATED DEMO · assist mode · you play Nikki (office staff)")
 else:
